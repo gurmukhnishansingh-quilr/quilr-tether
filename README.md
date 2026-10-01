@@ -114,6 +114,94 @@ as Claude Code, can read it.
 
 Regions: `auto`, `usa-1`, `usa-2`, `india-1`, `jp-1`, or `--base-url` for anything else.
 
+### One-line setup
+
+Add the profile and apply it in one command. `--yes` skips the y/N question; tether
+still backs up `settings.json` first, so `tether restore` undoes it.
+
+```sh
+# macOS / Linux / PowerShell 7
+tether profile add quilr --type quilr --region auto --email you@company.com --label claude-code && tether use quilr --yes
+```
+```powershell
+# Windows PowerShell 5.1 (no &&)
+tether profile add quilr --type quilr --region auto --email you@company.com --label claude-code; tether use quilr --yes
+```
+
+Install and configure together:
+
+```sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/gurmukhnishansingh-quilr/quilr-tether/main/install.sh | sh && export PATH="$HOME/.local/bin:/usr/local/bin:$PATH" && tether profile add quilr --type quilr --region auto --email you@company.com --label claude-code && tether use quilr --yes
+```
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/gurmukhnishansingh-quilr/quilr-tether/main/install.ps1 | iex; tether profile add quilr --type quilr --region auto --email you@company.com --label claude-code; tether use quilr --yes
+```
+
+`--region auto` points at `https://guardrails.quilr.ai/anthropic_messages`. It is
+also the default, so you can leave `--region` out.
+
+### Passing the API key
+
+With none of these options, `tether profile add` prompts for the key with hidden input.
+Use only one of them:
+
+| Option | How the key is passed | When to use it |
+|---|---|---|
+| `--key sk-quilr-...` | Directly on the command line | Quickest, but it lands in your shell history (tether warns) |
+| `--key-env VAR` | Read from an environment variable | Scripts and CI; nothing in the command itself |
+| `--key-stdin` | Read from standard input | Piping from a file or a secrets manager |
+| *(none)* | Hidden prompt | Interactive use; the safest option |
+
+```sh
+# Key on the command line
+tether profile add quilr --type quilr --region auto --email you@company.com --label claude-code --key sk-quilr-XXXX && tether use quilr --yes
+
+# Key from an environment variable (macOS / Linux)
+export QUILR_KEY=sk-quilr-XXXX
+tether profile add quilr --type quilr --region auto --email you@company.com --label claude-code --key-env QUILR_KEY && tether use quilr --yes
+
+# Key piped in
+cat ~/quilr.key | tether profile add quilr --type quilr --region auto --key-stdin && tether use quilr --yes
+```
+```powershell
+# Key from an environment variable (Windows PowerShell)
+$env:QUILR_KEY = "sk-quilr-XXXX"
+tether profile add quilr --type quilr --region auto --email you@company.com --label claude-code --key-env QUILR_KEY; tether use quilr --yes
+```
+
+However it's passed, the key is stored in the OS keychain, never in
+`settings.json`, and output only ever shows it masked (`sk-quilr-…XXXX`). To change
+it later, run the same `profile add` command again with `--force` and the new key.
+
+### Profile options
+
+| Option | What it sets | Notes |
+|---|---|---|
+| `--region` | Gateway URL | `auto`, `usa-1`, `usa-2`, `india-1` or `jp-1` |
+| `--base-url URL` | Gateway URL | Instead of `--region`, for any other endpoint |
+| `--email` | `X-User-Email` header | Optional |
+| `--label` | `X-Provider-Label` header | Optional |
+| `--no-discovery` | Model discovery off | On by default; fills `/model` with the gateway's models |
+| `--bedrock-backed` | Experimental betas off | Set it when the gateway forwards to Bedrock |
+| `--sonnet` / `--opus` / `--haiku` / `--fable ID` | Pinned models | Optional |
+
+### Everyday use
+
+```sh
+tether status                     # active profile and any conflicting settings
+tether doctor                     # live check: auth, streaming, model list, pins
+tether models                     # the models /model will show
+tether profile list               # all profiles; * marks the active one
+tether use quilr-us               # switch to another region or gateway
+tether restore                    # undo the last change
+tether pin quilr --sonnet claude-sonnet-4-6 && tether use quilr
+```
+
+To apply a profile to one project instead of everywhere, add `--scope local`
+(writes the git-ignored `<repo>/.claude/settings.local.json`).
+
 ## Commands
 
 | Command | What it does |
@@ -202,6 +290,69 @@ Claude Code v2.1.285+. The command prints Intune and Jamf deployment notes for:
 
 On macOS you can deploy the generated plist instead, as a configuration profile
 for the `com.anthropic.claudecode` domain.
+
+## Remove or uninstall
+
+Do these in order. If you uninstall tether while Claude Code still points at it for
+the key (`apiKeyHelper`), Claude Code can't get the key.
+
+**1. Remove the gateway settings from Claude Code.** This switches back to your normal
+claude.ai login or Console key and removes only the keys tether wrote:
+
+```sh
+tether profile add direct --type anthropic
+tether use direct --yes
+```
+
+Or put `settings.json` back exactly as it was before tether's last change:
+
+```sh
+tether restore --yes              # latest backup
+tether restore --list             # see all backups
+tether restore 20261002T1430      # a specific one
+```
+
+If you applied the profile with `--scope local` or `--scope project`, add the same
+`--scope` here.
+
+**2. Remove the profile and its stored key:**
+
+```sh
+tether profile remove quilr --yes
+```
+
+This deletes the profile and its key from the OS keychain. tether warns if the
+profile is still applied anywhere.
+
+**3. Uninstall tether:**
+
+| Installed with | Uninstall |
+|---|---|
+| Homebrew | `brew uninstall tether`, then optionally `brew untap gurmukhnishansingh-quilr/tap` |
+| winget | `winget uninstall Quilr.Tether` |
+| `install.sh` | `rm /usr/local/bin/tether` (or `rm ~/.local/bin/tether`) |
+| `install.ps1` | `Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\tether"`, then remove that folder from your user PATH |
+
+**Optional cleanup** of profiles, the model cache and tether's settings backups. Keep
+the backups if you might want an older `settings.json` back.
+
+```sh
+rm -rf ~/.config/tether ~/.claude/backups/settings.*        # macOS / Linux
+```
+```powershell
+Remove-Item -Recurse "$env:APPDATA\tether"; Remove-Item "$env:USERPROFILE\.claude\backups\settings.*"   # Windows
+```
+
+**Everything in one command:**
+
+```sh
+# macOS / Linux (Homebrew install)
+tether profile add direct --type anthropic && tether use direct --yes && tether profile remove quilr --yes && brew uninstall tether
+```
+```powershell
+# Windows (winget install)
+tether profile add direct --type anthropic; tether use direct --yes; tether profile remove quilr --yes; winget uninstall Quilr.Tether
+```
 
 ## Files
 
