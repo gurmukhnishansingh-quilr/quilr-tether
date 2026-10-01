@@ -54,7 +54,7 @@ homebrew_casks:
     repository:
       owner: gurmukhnishansingh-quilr
       name: homebrew-tap
-      token: '{{ index .Env "RELEASE_TOKEN" }}'
+      token: "{{ .Env.RELEASE_TOKEN }}"
     skip_upload: '{{ if index .Env "RELEASE_TOKEN" }}false{{ else }}true{{ end }}'
     homepage: https://github.com/gurmukhnishansingh-quilr/quilr-tether
     description: Tether your AI coding agents to the Quilr LLM Gateway
@@ -93,7 +93,7 @@ winget:
       owner: gurmukhnishansingh-quilr
       name: winget-pkgs
       branch: "Quilr.Tether-{{ .Version }}"
-      token: '{{ index .Env "RELEASE_TOKEN" }}'
+      token: "{{ .Env.RELEASE_TOKEN }}"
       pull_request:
         enabled: true
         draft: false
