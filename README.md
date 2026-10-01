@@ -16,38 +16,67 @@ Target machines don't need Python, Go or any other runtime.
 
 ## Install
 
-Download the binary for your platform from `dist/` (or your release page), rename
-it to `tether` (`tether.exe` on Windows), and put it on your `PATH`:
+tether is a single prebuilt binary. You don't need Go, Python or any other runtime.
 
+**macOS / Linux (Homebrew)**
 ```sh
-# macOS / Linux
-install -m 755 tether-darwin-arm64 /usr/local/bin/tether      # pick your OS/arch
+brew install gurmukhnishansingh-quilr/tap/tether
+```
+
+**Windows (winget)**
+```powershell
+winget install Quilr.Tether
+```
+
+**Install script** (no package manager needed; checks the SHA-256 against the release)
+```sh
+# macOS / Linux: installs to /usr/local/bin, or ~/.local/bin without write access
+curl -fsSL https://raw.githubusercontent.com/gurmukhnishansingh-quilr/quilr-tether/main/install.sh | sh
 ```
 ```powershell
-# Windows
-New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\tether" | Out-Null
-Copy-Item tether-windows-amd64.exe "$env:LOCALAPPDATA\Programs\tether\tether.exe"
-# then add that folder to your user PATH
+# Windows: installs to %LOCALAPPDATA%\Programs\tether and adds it to your PATH (no admin needed)
+irm https://raw.githubusercontent.com/gurmukhnishansingh-quilr/quilr-tether/main/install.ps1 | iex
 ```
+Set `TETHER_VERSION=v0.1.0` to pin a version, or `TETHER_INSTALL_DIR` to choose where it goes.
 
-Install the binary **before** running `tether use`. The `apiKeyHelper` it writes
-points at the binary's path, so moving it later means re-running `tether use`.
+**Manual:** download the archive for your platform from
+[Releases](https://github.com/gurmukhnishansingh-quilr/quilr-tether/releases), extract
+`tether` (`tether.exe` on Windows) and put it on your `PATH`.
+
+Upgrade with `brew upgrade tether`, `winget upgrade Quilr.Tether`, or by re-running the script.
+The `apiKeyHelper` that `tether use` writes points at the installed command, so
+upgrades keep working. If you move the binary by hand, re-run `tether use`.
 
 ### Build from source
 
-With Go 1.26+ installed, `go install` builds and installs it in one step:
+Only needed if you're developing tether. Requires Go 1.26+:
 
 ```sh
 go install github.com/gurmukhnishansingh-quilr/quilr-tether/cmd/tether@latest
+# or, from a checkout:
+go test ./...
+./build.sh                 # cross-compiles every platform into dist/ (or: pwsh ./build.ps1)
 ```
 
-You need Go 1.26+. The build scripts cross-compile every target into `dist/` with
-`CGO_ENABLED=0`, so one machine can build them all:
+### Publishing a release
+
+Pushing a tag runs `.github/workflows/release.yml` (GoReleaser). It builds every
+platform, attaches the archives, `checksums.txt` and both install scripts to a
+GitHub release, updates the Homebrew tap, and opens a PR to `microsoft/winget-pkgs`:
 
 ```sh
-./build.sh                 # or: pwsh ./build.ps1
-go test ./...              # run the tests
+git tag v0.2.0 && git push origin v0.2.0
 ```
+
+Homebrew and winget publishing need a repository secret named `RELEASE_TOKEN`.
+It's a GitHub personal access token with `public_repo` scope, which can push to
+`gurmukhnishansingh-quilr/homebrew-tap` and to the `winget-pkgs` fork. Without
+it, the release still publishes and only the brew/winget steps are skipped. Add
+the secret, then re-run the workflow for the same tag. The first winget
+submission is reviewed by Microsoft, which usually takes a few days; until then,
+use the install script.
+
+Check the config locally with `goreleaser check && goreleaser release --snapshot --clean`.
 
 ## Quick start: Quilr India
 

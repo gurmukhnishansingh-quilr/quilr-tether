@@ -1,0 +1,32 @@
+name: release
+
+# Push a tag like v0.2.0 to publish binaries to GitHub Releases, update the
+# Homebrew tap and open a winget-pkgs PR. Homebrew/winget publishing needs the
+# RELEASE_TOKEN secret (see README "Publishing a release"); without it only the
+# GitHub release is created. Re-run this workflow after adding the secret.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}

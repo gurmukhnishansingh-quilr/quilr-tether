@@ -1,0 +1,103 @@
+# Release pipeline: `git tag vX.Y.Z && git push --tags` runs this via
+# .github/workflows/release.yml. It publishes prebuilt binaries, so users never
+# need Go. Validate locally with: goreleaser check && goreleaser release --snapshot --clean
+version: 2
+project_name: tether
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: tether
+    main: ./cmd/tether
+    binary: tether
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: tether
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^ci:"]
+
+release:
+  github:
+    owner: gurmukhnishansingh-quilr
+    name: quilr-tether
+  # Lets the workflow be re-run for an existing tag (e.g. after adding the
+  # RELEASE_TOKEN secret) without failing on already-uploaded assets.
+  replace_existing_artifacts: true
+  extra_files:
+    - glob: ./install.sh
+    - glob: ./install.ps1
+
+# brew install gurmukhnishansingh-quilr/tap/tether
+homebrew_casks:
+  - name: tether
+    repository:
+      owner: gurmukhnishansingh-quilr
+      name: homebrew-tap
+      token: '{{ index .Env "RELEASE_TOKEN" }}'
+    skip_upload: '{{ if index .Env "RELEASE_TOKEN" }}false{{ else }}true{{ end }}'
+    homepage: https://github.com/gurmukhnishansingh-quilr/quilr-tether
+    description: Tether your AI coding agents to the Quilr LLM Gateway
+    commit_author:
+      name: tether-release-bot
+      email: gsingh@quilr.ai
+    hooks:
+      post:
+        # The binaries are not notarized yet; clear the quarantine flag so
+        # Gatekeeper doesn't block the first run.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/tether"]
+          end
+
+# winget install Quilr.Tether
+# Opens a PR against microsoft/winget-pkgs from the gurmukhnishansingh-quilr fork.
+winget:
+  - name: Tether
+    package_identifier: Quilr.Tether
+    publisher: Quilr
+    publisher_url: https://quilr.ai
+    short_description: Tether your AI coding agents to the Quilr LLM Gateway
+    description: |
+      tether connects AI coding agents such as Claude Code to the Quilr LLM Gateway,
+      Anthropic or Amazon Bedrock. It edits settings safely, keeps API keys in the
+      Windows Credential Manager and checks the gateway end to end.
+    homepage: https://github.com/gurmukhnishansingh-quilr/quilr-tether
+    license: Proprietary
+    tags: [ai, claude, claude-code, cli, gateway, llm, quilr]
+    commit_author:
+      name: tether-release-bot
+      email: gsingh@quilr.ai
+    skip_upload: '{{ if index .Env "RELEASE_TOKEN" }}false{{ else }}true{{ end }}'
+    repository:
+      owner: gurmukhnishansingh-quilr
+      name: winget-pkgs
+      branch: "Quilr.Tether-{{ .Version }}"
+      token: '{{ index .Env "RELEASE_TOKEN" }}'
+      pull_request:
+        enabled: true
+        draft: false
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
