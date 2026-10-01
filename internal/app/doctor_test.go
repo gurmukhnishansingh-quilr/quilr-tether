@@ -1,0 +1,272 @@
+package app
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+)
+
+type doctorReport struct {
+	OK     bool    `json:"ok"`
+	Tag    string  `json:"tag"`
+	Checks []Check `json:"checks"`
+}
+
+func (s *sandbox) doctor(args ...string) (doctorReport, result) {
+	s.t.Helper()
+	r := s.run(append([]string{"doctor", "--json"}, args...)...)
+	var rep doctorReport
+	if err := json.Unmarshal([]byte(r.out), &rep); err != nil {
+		s.t.Fatalf("doctor output not JSON (exit %d): %s\n%s", r.code, r.out, r.err)
+	}
+	return rep, r
+}
+
+func (rep doctorReport) check(id int) Check {
+	for _, c := range rep.Checks {
+		if c.ID == id {
+			return c
+		}
+	}
+	return Check{}
+}
+
+func setupDoctor(t *testing.T, extra ...string) (*sandbox, *fakeGateway) {
+	s := newSandbox(t)
+	g := newFakeGateway(t)
+	s.addQuilr("qi", append([]string{"--base-url", g.Base()}, extra...)...)
+	s.ok("use", "qi", "--yes")
+	return s, g
+}
+
+func TestDoctorAllGreen(t *testing.T) {
+	s, g := setupDoctor(t, "--sonnet", "claude-sonnet-4-6")
+	rep, r := s.doctor("qi")
+	if r.code != ExitOK || !rep.OK {
+		t.Fatalf("exit %d\n%s", r.code, r.out)
+	}
+	for id := 1; id <= 9; id++ {
+		c := rep.check(id)
+		if c.Status != "pass" && !(id == 7 && c.Status == "warn") { // team-default-group is dropped -> warn
+			t.Errorf("check %d %s: %s %s", id, c.Name, c.Status, c.Detail)
+		}
+	}
+	if !strings.Contains(rep.check(7).Detail, "team-default-group") {
+		t.Error("dropped id not reported")
+	}
+	// Every request carries the run's tag, the key and the custom headers; nothing follows redirects.
+	for _, req := range g.requests {
+		if req.Header.Get("X-Conversation-Id") != rep.Tag || !strings.HasPrefix(rep.Tag, "tether-doctor-") {
+			t.Errorf("%s %s missing tag", req.Method, req.URL)
+		}
+		if req.Header.Get("X-Api-Key") != testKey || req.Header.Get("X-User-Email") != "dev@example.com" {
+			t.Errorf("%s %s missing auth/custom headers", req.Method, req.URL)
+		}
+		if req.Header.Get("Anthropic-Version") != "2023-06-01" {
+			t.Error("anthropic-version missing")
+		}
+	}
+	assertNoKey(t, r.out, r.err)
+	// The human table renders too.
+	if r := s.run("doctor", "qi"); r.code != ExitOK || !strings.Contains(r.out, "PASS") {
+		t.Fatal(r.out)
+	}
+}
+
+func TestDoctorUsesActiveProfileAndPicksDiscoveredSonnet(t *testing.T) {
+	s, g := setupDoctor(t)
+	var model string
+	g.messagesHandler = func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		model, _ = body["model"].(string)
+		writeJSONResp(w, 200, map[string]any{"id": "m"})
+	}
+	rep, _ := s.doctor()
+	if model != "claude-sonnet-4-6" {
+		t.Fatalf("pinged %q", model)
+	}
+	if rep.check(3).Status != "pass" {
+		t.Fatal(rep.check(3))
+	}
+}
+
+func TestDoctorInferenceFailureExitsOne(t *testing.T) {
+	s, g := setupDoctor(t)
+	g.messagesHandler = func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, 401, map[string]any{"error": map[string]any{"message": "invalid x-api-key " + testKey}})
+	}
+	rep, r := s.doctor("qi")
+	if r.code != ExitDoctorFailed || rep.OK {
+		t.Fatalf("exit %d", r.code)
+	}
+	if c := rep.check(3); c.Status != "fail" || !strings.Contains(c.Fix, "rejected the key") {
+		t.Fatal(c)
+	}
+	assertNoKey(t, r.out, r.err) // the gateway echoed the key; we must not
+}
+
+func TestDoctorDiscoveryRedirectFails(t *testing.T) {
+	s, g := setupDoctor(t)
+	g.modelsHandler = func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://elsewhere.example/v1/models", http.StatusMovedPermanently)
+	}
+	rep, r := s.doctor("qi")
+	c := rep.check(7)
+	if c.Status != "fail" || !strings.Contains(c.Detail, "redirect") || r.code != ExitDoctorFailed {
+		t.Fatal(c)
+	}
+	if c8 := rep.check(8); c8.Status != "pass" { // no pins -> nothing to verify
+		t.Fatal(c8)
+	}
+}
+
+func TestDoctorDiscoveryTooSlowAndBadShape(t *testing.T) {
+	s, g := setupDoctor(t, "--discovery-timeout-ms", "50")
+	g.modelsHandler = func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(120 * time.Millisecond)
+		writeJSONResp(w, 200, map[string]any{"data": []any{map[string]any{"id": "claude-x"}}})
+	}
+	rep, _ := s.doctor("qi")
+	if c := rep.check(7); c.Status != "fail" || !strings.Contains(c.Detail, "too slow") {
+		t.Fatal(c)
+	}
+	g.modelsHandler = func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, 200, map[string]any{"models": []string{"claude-x"}})
+	}
+	rep, _ = s.doctor("qi")
+	if c := rep.check(7); c.Status != "fail" || !strings.Contains(c.Detail, "shape") {
+		t.Fatal(c)
+	}
+}
+
+func TestDoctorDiscoveryOffDowngradesToWarn(t *testing.T) {
+	s, g := setupDoctor(t, "--no-discovery")
+	g.modelsHandler = func(w http.ResponseWriter, r *http.Request) { writeJSONResp(w, 404, map[string]any{}) }
+	rep, r := s.doctor("qi")
+	if c := rep.check(7); c.Status != "warn" || r.code != ExitOK {
+		t.Fatal(c, r.code)
+	}
+}
+
+func TestDoctorBufferedStreamWarns(t *testing.T) {
+	s, g := setupDoctor(t)
+	g.messagesHandler = func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["stream"] == true {
+			streamEvents(w, 0, 700*time.Millisecond) // everything at once, at the end
+			return
+		}
+		writeJSONResp(w, 200, map[string]any{"id": "m"})
+	}
+	rep, _ := s.doctor("qi")
+	if c := rep.check(4); c.Status != "warn" || !strings.Contains(c.Detail, "buffer") {
+		t.Fatal(c)
+	}
+}
+
+func TestDoctorStreamWrongContentType(t *testing.T) {
+	s, g := setupDoctor(t)
+	g.messagesHandler = func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, 200, map[string]any{"id": "m"})
+	}
+	rep, _ := s.doctor("qi")
+	if c := rep.check(4); c.Status != "fail" || !strings.Contains(c.Detail, "text/event-stream") {
+		t.Fatal(c)
+	}
+}
+
+func TestDoctorBetaRejectedAndBedrockBacked(t *testing.T) {
+	reject := func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("anthropic-beta") != "" {
+			writeJSONResp(w, 400, map[string]any{"error": map[string]any{"message": "Unexpected value(s) for the anthropic-beta header"}})
+			return
+		}
+		defaultMessages(w, r)
+	}
+	s, g := setupDoctor(t)
+	g.messagesHandler = reject
+	rep, r := s.doctor("qi")
+	if c := rep.check(5); c.Status != "fail" || r.code != ExitDoctorFailed {
+		t.Fatal(c)
+	}
+
+	s2, g2 := setupDoctor(t, "--bedrock-backed")
+	g2.messagesHandler = reject
+	rep, r = s2.doctor("qi")
+	if c := rep.check(5); c.Status != "warn" || r.code != ExitOK {
+		t.Fatal(c, r.code)
+	}
+}
+
+func TestDoctorCountTokens404IsWarning(t *testing.T) {
+	s, g := setupDoctor(t)
+	g.countTokensHandler = func(w http.ResponseWriter, r *http.Request) { writeJSONResp(w, 404, map[string]any{}) }
+	rep, r := s.doctor("qi")
+	if c := rep.check(6); c.Status != "warn" || r.code != ExitOK {
+		t.Fatal(c, r.code)
+	}
+}
+
+func TestDoctorPinsNotEnabled(t *testing.T) {
+	s, _ := setupDoctor(t, "--opus", "claude-opus-9")
+	s.ok("override", "qi", "claude-sonnet-4-6=team/sonnet")
+	s.ok("use", "qi", "--yes")
+	rep, _ := s.doctor("qi")
+	c := rep.check(8)
+	if c.Status != "warn" || !strings.Contains(c.Detail, "claude-opus-9") || !strings.Contains(c.Detail, "team/sonnet") {
+		t.Fatal(c)
+	}
+}
+
+func TestDoctorLocalChecks(t *testing.T) {
+	s, _ := setupDoctor(t)
+	s.env = []string{"CLAUDE_CODE_USE_BEDROCK=1", "ANTHROPIC_MODEL=claude-opus-4-8"}
+	proj, _ := SettingsPath("project", "")
+	s.writeJSON(proj, `{"env": {"ANTHROPIC_BASE_URL": "https://other.example"}}`)
+	rep, r := s.doctor("qi")
+	if c := rep.check(1); c.Status != "fail" || !strings.Contains(c.Detail, "discovery never runs") {
+		t.Fatal(c)
+	}
+	c2 := rep.check(2)
+	if c2.Status != "fail" || !strings.Contains(c2.Detail, "ANTHROPIC_MODEL") || !strings.Contains(c2.Detail, "project settings") {
+		t.Fatal(c2)
+	}
+	if r.code != ExitDoctorFailed {
+		t.Fatal(r.code)
+	}
+}
+
+func TestDoctorNetworkError(t *testing.T) {
+	s := newSandbox(t)
+	g := newFakeGateway(t)
+	s.addQuilr("qi", "--base-url", g.Base())
+	g.Close()
+	rep, r := s.doctor("qi", "--timeout", "2")
+	if rep.check(3).Status != "fail" || r.code != ExitDoctorFailed {
+		t.Fatal(rep.check(3))
+	}
+}
+
+func TestDoctorNonGatewayProfiles(t *testing.T) {
+	s := newSandbox(t)
+	s.ok("profile", "add", "br", "--type", "bedrock", "--aws-region", "eu-west-1", "--aws-profile", "x", "--sso-refresh")
+	s.ok("use", "br", "--yes")
+	orig := lookPath
+	lookPath = func(string) (string, error) { return "", errNotFound }
+	t.Cleanup(func() { lookPath = orig })
+	rep, r := s.doctor("br")
+	if rep.check(3).Status != "skip" || rep.check(10).Status != "fail" || r.code != ExitDoctorFailed {
+		t.Fatalf("%+v", rep.Checks)
+	}
+	s.ok("profile", "add", "direct", "--type", "anthropic")
+	s.ok("use", "direct", "--yes")
+	if rep, r := s.doctor("direct"); r.code != ExitOK || rep.check(3).Status != "skip" {
+		t.Fatalf("%+v", rep.Checks)
+	}
+}
+
+var errNotFound = &Error{Msg: "not found"}
