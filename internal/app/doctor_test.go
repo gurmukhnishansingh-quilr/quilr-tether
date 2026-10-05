@@ -311,3 +311,22 @@ func TestDoctorRevokedKey(t *testing.T) {
 		t.Fatalf("%+v", rep.check(4))
 	}
 }
+
+func TestKeyProblemNamesMatchingProvider(t *testing.T) {
+	cases := map[string][]string{
+		"anthropic":    {"for 'anthropic_messages'", "set-key qi"},
+		"bedrock":      {"'anthropic_messages_bedrock'", "--bedrock-backed"},
+		"azure_openai": {"'anthropic_messages_azure'", "set-key qi"},
+	}
+	for have, wants := range cases {
+		summary, fix, ok := keyProblem("HTTP 400: This API key is configured for '"+have+"' provider. Use the appropriate endpoint", "qi")
+		if !ok {
+			t.Fatalf("%s: not recognised", have)
+		}
+		for _, w := range wants {
+			if !strings.Contains(summary+" "+fix, w) {
+				t.Errorf("%s: missing %q in %q / %q", have, w, summary, fix)
+			}
+		}
+	}
+}

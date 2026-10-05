@@ -443,10 +443,19 @@ var (
 func keyProblem(detail, profile string) (summary, fix string, ok bool) {
 	setKey := "tether profile set-key " + profile
 	if m := keyProviderRE.FindStringSubmatch(detail); m != nil {
+		have := m[1]
+		// Point at the anthropic_messages* variant for the same upstream.
+		want, extra := "anthropic_messages", ""
+		switch {
+		case strings.Contains(strings.ToLower(have), "bedrock"):
+			want = "anthropic_messages_bedrock"
+			extra = fmt.Sprintf(", and mark the profile Bedrock-backed: tether profile add %s --type quilr --bedrock-backed --force ... && tether use %s --yes", profile, profile)
+		case strings.Contains(strings.ToLower(have), "azure"):
+			want = "anthropic_messages_azure"
+		}
 		return fmt.Sprintf("this API key was created in Quilr for the '%s' provider, but Claude Code uses the "+
-				"/anthropic_messages route, which needs a key created for 'anthropic_messages'", m[1]),
-			"in Quilr, create a key with provider 'anthropic_messages' ('anthropic_messages_bedrock' or " +
-				"'anthropic_messages_azure' if the upstream is Bedrock or Azure), then run: " + setKey, true
+				"/anthropic_messages route, which needs a key created for '%s'", have, want),
+			fmt.Sprintf("in Quilr, create a key with provider '%s', then run: %s%s", want, setKey, extra), true
 	}
 	if keyInvalidRE.MatchString(detail) {
 		return "the gateway says this API key is invalid or revoked",
