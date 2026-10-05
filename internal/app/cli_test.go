@@ -428,9 +428,14 @@ func TestManagedScopePermissionError(t *testing.T) {
 
 func TestUsageErrors(t *testing.T) {
 	s := newSandbox(t)
-	for _, args := range [][]string{{"frobnicate"}, {"use"}, {"use", "x", "--scope", "galaxy"}, {"use", "--bogus"}, {}} {
+	for _, args := range [][]string{{"frobnicate"}, {"use"}, {"use", "x", "--scope", "galaxy"}, {"use", "--bogus"}} {
 		if r := s.run(args...); r.code != ExitUsage {
 			t.Errorf("%v: exit %d", args, r.code)
+		}
+	}
+	for _, args := range [][]string{{}, {"--help"}, {"help"}, {"--version"}, {"-v"}, {"version"}} {
+		if r := s.run(args...); r.code != ExitOK || r.out == "" {
+			t.Errorf("%v: exit %d, must print and exit 0 (winget runs the bare command)", args, r.code)
 		}
 	}
 	if r := s.run("use", "-h"); r.code != ExitOK {

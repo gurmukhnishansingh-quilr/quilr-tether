@@ -135,14 +135,14 @@ func Main(args []string) int {
 
 // Run executes a command with a given UI (tests pass buffers).
 func Run(args []string, ui *UI) int {
+	// A bare `tether` prints help and exits 0: package-manager validators
+	// (winget) run the installed command with no arguments and treat a
+	// non-zero exit as a broken install.
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		usage(ui.Out)
-		if len(args) == 0 {
-			return ExitUsage
-		}
 		return ExitOK
 	}
-	if args[0] == "--version" {
+	if args[0] == "--version" || args[0] == "-v" {
 		ui.Println("tether " + Version)
 		return ExitOK
 	}
