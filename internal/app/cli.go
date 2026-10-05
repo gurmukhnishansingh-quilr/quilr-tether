@@ -35,7 +35,7 @@ type command struct {
 
 func commands() []command {
 	return []command{
-		{"profile", "add, list, show or remove profiles", "profile add|list|show|remove ...", cmdProfile, false},
+		{"profile", "add, list, show, set-key or remove profiles", "profile add|list|show|set-key|remove ...", cmdProfile, false},
 		{"use", "apply a profile to a settings file (backup + diff preview)", "use <name> [--plaintext]", cmdUse, false},
 		{"status", "active profile, owned keys, merged view, conflicts", "status [--json]", cmdStatus, false},
 		{"diff", "show what `use` would change, without writing", "diff <name> [--plaintext]", cmdDiff, false},

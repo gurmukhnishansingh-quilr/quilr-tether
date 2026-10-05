@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -205,7 +206,7 @@ func (d *doctorRun) checkInference(model string) Check {
 	}
 	fixes := map[int]string{
 		400: "pin a model the key can use: `tether pin <name> --sonnet ID`",
-		401: "the gateway rejected the key; re-store it with `tether profile add <name> --force --key-stdin ...`",
+		401: "the gateway rejected the key; replace it with `tether profile set-key <name>`",
 		403: "the key is not allowed to use this model or route",
 		404: "wrong region or base URL; Quilr's route ends in /anthropic_messages",
 		429: "rate limited; retry later",
@@ -352,7 +353,7 @@ func (d *doctorRun) run() ([]Check, error) {
 	}
 	if key == "" {
 		return append(checks, Check{ID: 3, Name: "inference", Status: "fail", Detail: "no API key stored for this profile",
-			Fix: fmt.Sprintf("tether profile add %s --force --key-stdin ...", d.p.Name)}), nil
+			Fix: fmt.Sprintf("tether profile set-key %s", d.p.Name)}), nil
 	}
 	d.key = key
 	discovery := d.checkDiscovery() // first, so the ping can use a discovered model
@@ -362,6 +363,7 @@ func (d *doctorRun) run() ([]Check, error) {
 		Check{ID: 9, Name: "log tag", Status: "pass", Detail: "requests tagged X-Conversation-Id: " + d.tag,
 			Fix: "search the Quilr logs for this id"})
 	sort.SliceStable(checks, func(i, j int) bool { return checks[i].ID < checks[j].ID })
+	collapseKeyProblems(checks, d.p.Name)
 	return checks, nil
 }
 
@@ -429,4 +431,51 @@ func cmdDoctor(c *Ctx, args []string) error {
 		return &Error{Code: ExitDoctorFailed}
 	}
 	return nil
+}
+
+var (
+	keyProviderRE = regexp.MustCompile(`configured for '([^']+)' provider`)
+	keyInvalidRE  = regexp.MustCompile(`(?i)(api key is invalid|has been revoked|invalid x-api-key|invalid api key)`)
+)
+
+// keyProblem recognises gateway errors caused by the key itself rather than
+// the endpoint or model, so doctor can name the real fix once.
+func keyProblem(detail, profile string) (summary, fix string, ok bool) {
+	setKey := "tether profile set-key " + profile
+	if m := keyProviderRE.FindStringSubmatch(detail); m != nil {
+		return fmt.Sprintf("this API key was created in Quilr for the '%s' provider, but Claude Code uses the "+
+				"/anthropic_messages route, which needs a key created for 'anthropic_messages'", m[1]),
+			"in Quilr, create a key with provider 'anthropic_messages' ('anthropic_messages_bedrock' or " +
+				"'anthropic_messages_azure' if the upstream is Bedrock or Azure), then run: " + setKey, true
+	}
+	if keyInvalidRE.MatchString(detail) {
+		return "the gateway says this API key is invalid or revoked",
+			"check the key in Quilr, then run: " + setKey, true
+	}
+	return "", "", false
+}
+
+// collapseKeyProblems reports a key problem once, on the first gateway check
+// that hit it, and marks later checks with the same cause as skipped.
+func collapseKeyProblems(checks []Check, profile string) {
+	first := -1
+	for i := range checks {
+		if checks[i].ID < 3 || checks[i].ID > 8 || checks[i].Status == "pass" {
+			continue
+		}
+		summary, fix, ok := keyProblem(checks[i].Detail, profile)
+		if !ok {
+			continue
+		}
+		if first < 0 {
+			first = i
+			checks[i].Status = "fail"
+			checks[i].Detail = summary
+			checks[i].Fix = fix
+			continue
+		}
+		checks[i].Status = "skip"
+		checks[i].Detail = fmt.Sprintf("not tested: same key problem as check %d", checks[first].ID)
+		checks[i].Fix = ""
+	}
 }

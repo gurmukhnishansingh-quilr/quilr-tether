@@ -98,7 +98,7 @@ func (c *Ctx) writeWithPreview(path string, current, next *ojson.Object) (bool, 
 
 func cmdProfile(c *Ctx, args []string) error {
 	if len(args) == 0 {
-		return usageErr("", "usage: tether profile add|list|show|remove ...")
+		return usageErr("", "usage: tether profile add|list|show|set-key|remove ...")
 	}
 	switch args[0] {
 	case "add":
@@ -109,8 +109,10 @@ func cmdProfile(c *Ctx, args []string) error {
 		return cmdProfileShow(c, args[1:])
 	case "remove", "rm":
 		return cmdProfileRemove(c, args[1:])
+	case "set-key":
+		return cmdProfileSetKey(c, args[1:])
 	}
-	return usageErr("", "unknown profile action %q; expected add, list, show or remove", args[0])
+	return usageErr("", "unknown profile action %q; expected add, list, show, set-key or remove", args[0])
 }
 
 func cmdProfileAdd(c *Ctx, args []string) error {
@@ -434,6 +436,56 @@ func cmdProfileShow(c *Ctx, args []string) error {
 			c.UI.Printf("%-22s %s\n", k, jsonString(v))
 		}
 	}
+	return nil
+}
+
+// cmdProfileSetKey replaces a profile's stored key without touching its other settings.
+func cmdProfileSetKey(c *Ctx, args []string) error {
+	fs := newFlagSet(c, "profile set-key", "profile set-key <name> [--key KEY | --key-stdin | --key-env VAR]")
+	key := fs.String("key", "", "API key (visible in shell history; prefer --key-stdin)")
+	keyStdin := fs.Bool("key-stdin", false, "read the API key from stdin")
+	keyEnv := fs.String("key-env", "", "read the API key from this environment variable")
+	pos, err := parseArgs(c, fs, args, 1, 1)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, set := range []bool{*key != "", *keyStdin, *keyEnv != ""} {
+		if set {
+			n++
+		}
+	}
+	if n > 1 {
+		return usageErr("", "use only one of --key, --key-stdin, --key-env")
+	}
+	p, err := GetProfile(pos[0])
+	if err != nil {
+		return err
+	}
+	if !p.NeedsKey() {
+		return usageErr("", "%q is a %s profile; it has no key", p.Name, p.Type)
+	}
+	newKey, err := readKeyInput(c, *key, *keyStdin, *keyEnv)
+	if err != nil {
+		return err
+	}
+	if newKey == "" {
+		return usageErr("pass --key-stdin, --key-env VAR, or run interactively", "no key given")
+	}
+	if p.KeyBackend != "" {
+		DeleteKey(p.Name, p.KeyBackend)
+	}
+	backend, err := StoreKey(p.Name, newKey)
+	if err != nil {
+		return err
+	}
+	p.KeyBackend = backend
+	if err := PutProfile(p); err != nil {
+		return err
+	}
+	os.Remove(cachePath(p.Name)) // models depend on the key
+	c.UI.Println(c.UI.C(fmt.Sprintf("Stored new key %s for %q in %s.", Mask(newKey), p.Name, backend), "green") +
+		" Claude Code picks it up on its next request. Check it with: tether doctor " + p.Name)
 	return nil
 }
 

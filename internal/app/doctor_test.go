@@ -102,7 +102,7 @@ func TestDoctorInferenceFailureExitsOne(t *testing.T) {
 	if r.code != ExitDoctorFailed || rep.OK {
 		t.Fatalf("exit %d", r.code)
 	}
-	if c := rep.check(3); c.Status != "fail" || !strings.Contains(c.Fix, "rejected the key") {
+	if c := rep.check(3); c.Status != "fail" || !strings.Contains(c.Fix, "set-key qi") {
 		t.Fatal(c)
 	}
 	assertNoKey(t, r.out, r.err) // the gateway echoed the key; we must not
@@ -270,3 +270,44 @@ func TestDoctorNonGatewayProfiles(t *testing.T) {
 }
 
 var errNotFound = &Error{Msg: "not found"}
+
+func TestDoctorKeyProviderMismatchReportedOnce(t *testing.T) {
+	s, g := setupDoctor(t)
+	mismatch := func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, 400, map[string]any{"error": map[string]any{"message": "This API key is configured for 'anthropic' provider. " +
+			"Use the appropriate endpoint or create a new API key with 'anthropic_messages', 'anthropic_messages_bedrock', or 'anthropic_messages_azure' provider."}})
+	}
+	g.modelsHandler, g.messagesHandler, g.countTokensHandler = mismatch, mismatch, mismatch
+	rep, r := s.doctor("qi")
+	if r.code != ExitDoctorFailed {
+		t.Fatalf("exit %d", r.code)
+	}
+	c3 := rep.check(3)
+	if c3.Status != "fail" || !strings.Contains(c3.Detail, "'anthropic' provider") || !strings.Contains(c3.Fix, "tether profile set-key qi") {
+		t.Fatalf("check 3: %+v", c3)
+	}
+	for _, id := range []int{4, 5, 6, 7} {
+		if c := rep.check(id); c.Status != "skip" || !strings.Contains(c.Detail, "same key problem as check 3") {
+			t.Errorf("check %d: %+v", id, c)
+		}
+	}
+	if rep.check(8).Status == "fail" {
+		t.Error("check 8 must not fail")
+	}
+}
+
+func TestDoctorRevokedKey(t *testing.T) {
+	s, g := setupDoctor(t)
+	revoked := func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, 401, map[string]any{"type": "error", "error": map[string]any{"type": "authentication_error",
+			"message": "The provided Quilr API key is invalid or has been revoked"}})
+	}
+	g.modelsHandler, g.messagesHandler, g.countTokensHandler = revoked, revoked, revoked
+	rep, _ := s.doctor("qi")
+	if c := rep.check(3); c.Status != "fail" || !strings.Contains(c.Fix, "set-key") {
+		t.Fatalf("%+v", c)
+	}
+	if rep.check(4).Status != "skip" {
+		t.Fatalf("%+v", rep.check(4))
+	}
+}

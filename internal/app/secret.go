@@ -102,7 +102,7 @@ func RequireKey(name, backend string) (string, error) {
 		return "", err
 	}
 	if key == "" {
-		return "", usageErr(fmt.Sprintf("store one with `tether profile add %s --force --key-stdin`", name),
+		return "", usageErr(fmt.Sprintf("store one with `tether profile set-key %s`", name),
 			"no key stored for profile %q", name)
 	}
 	return key, nil

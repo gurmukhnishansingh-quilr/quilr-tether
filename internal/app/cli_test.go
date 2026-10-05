@@ -440,3 +440,31 @@ func TestUsageErrors(t *testing.T) {
 		t.Error("version")
 	}
 }
+
+func TestProfileSetKey(t *testing.T) {
+	s := newSandbox(t)
+	s.addQuilr("qi", "--sonnet", "claude-sonnet-4-6")
+	before, _ := GetProfile("qi")
+	newKey := "sk-quilr-NEWKEY0000000000wxyz"
+	r := s.runStdin(newKey+"\n", "profile", "set-key", "qi", "--key-stdin")
+	if r.code != 0 {
+		t.Fatal(r.err)
+	}
+	if strings.Contains(r.out+r.err, newKey) {
+		t.Fatal("new key printed")
+	}
+	if k, _ := ReadKey("qi", "file"); k != newKey {
+		t.Fatal("key not replaced")
+	}
+	after, _ := GetProfile("qi")
+	if after.Region != before.Region || after.Email != before.Email || after.Pins["sonnet"] != "claude-sonnet-4-6" {
+		t.Fatalf("other settings changed: %+v", after)
+	}
+	s.ok("profile", "add", "direct", "--type", "anthropic")
+	if r := s.run("profile", "set-key", "direct", "--key", "x"); r.code != ExitUsage {
+		t.Fatal("anthropic profile has no key")
+	}
+	if r := s.run("profile", "set-key", "qi"); r.code != ExitUsage {
+		t.Fatal("missing key must be a usage error")
+	}
+}

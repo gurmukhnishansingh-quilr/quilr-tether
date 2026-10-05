@@ -172,8 +172,20 @@ tether profile add quilr --type quilr --region auto --email you@company.com --la
 ```
 
 However it's passed, the key is stored in the OS keychain, never in
-`settings.json`, and output only ever shows it masked (`sk-quilr-…XXXX`). To change
-it later, run the same `profile add` command again with `--force` and the new key.
+`settings.json`, and output only ever shows it masked (`sk-quilr-…XXXX`).
+
+To replace the key later, for example after rotating it, without changing anything else:
+
+```sh
+tether profile set-key quilr                          # hidden prompt
+tether profile set-key quilr --key-env QUILR_KEY      # or --key / --key-stdin
+```
+
+The key must be created in Quilr for the **`anthropic_messages`** provider
+(`anthropic_messages_bedrock` or `anthropic_messages_azure` if the gateway forwards
+to Bedrock or Azure). A key created for the plain `anthropic` provider is rejected
+with *"This API key is configured for 'anthropic' provider"*, and `tether doctor`
+says so.
 
 ### Profile options
 
@@ -208,6 +220,7 @@ To apply a profile to one project instead of everywhere, add `--scope local`
 |---|---|
 | `profile add <name> --type quilr\|anthropic\|bedrock` | Create a profile. Prompts for anything missing when run in a terminal. |
 | `profile list \| show <name> \| remove <name>` | Manage profiles. Keys are always masked (`sk-quilr-…abcd`). |
+| `profile set-key <name>` | Replace a profile's stored key, keeping its other settings. |
 | `use <name> [--plaintext]` | Apply a profile, with backup, diff preview and confirmation. |
 | `diff <name>` | Show what `use` would change without writing anything. |
 | `status [--json]` | Show the active profile, owned keys, the merged view across scopes, and conflicts. |
