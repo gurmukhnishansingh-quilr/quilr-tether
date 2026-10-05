@@ -10,7 +10,7 @@ import (
 // OwnedTop are the top-level settings keys tether manages. enforceAvailableModels
 // is not in the original list, but `allow --enforce` writes it, so it must be
 // cleared on switch like availableModels.
-var OwnedTop = []string{"model", "availableModels", "enforceAvailableModels", "modelOverrides", "apiKeyHelper", "awsAuthRefresh"}
+var OwnedTop = []string{"model", "availableModels", "enforceAvailableModels", "modelOverrides", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport"}
 
 var ownedEnvExact = map[string]bool{
 	"ANTHROPIC_BASE_URL":                             true,
@@ -24,6 +24,7 @@ var ownedEnvExact = map[string]bool{
 	"CLAUDE_CODE_USE_BEDROCK":                        true,
 	"AWS_REGION":                                     true,
 	"AWS_PROFILE":                                    true,
+	"ANTHROPIC_BEDROCK_BASE_URL":                     true,
 }
 
 var ownedEnvPatterns = []*regexp.Regexp{
@@ -35,7 +36,7 @@ var ownedEnvPatterns = []*regexp.Regexp{
 // status and doctor report them.
 var ForeignProviderVars = []string{
 	"CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_MANTLE",
-	"ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+	"ANTHROPIC_VERTEX_BASE_URL",
 }
 
 func IsOwnedEnv(name string) bool {

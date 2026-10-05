@@ -218,7 +218,7 @@ To apply a profile to one project instead of everywhere, add `--scope local`
 
 | Command | What it does |
 |---|---|
-| `profile add <name> --type quilr\|anthropic\|bedrock` | Create a profile. Prompts for anything missing when run in a terminal. |
+| `profile add <name> --type quilr\|quilr-bedrock\|anthropic\|bedrock` | Create a profile. Prompts for anything missing when run in a terminal. |
 | `profile list \| show <name> \| remove <name>` | Manage profiles. Keys are always masked (`sk-quilr-…abcd`). |
 | `profile set-key <name>` | Replace a profile's stored key, keeping its other settings. |
 | `use <name> [--plaintext]` | Apply a profile, with backup, diff preview and confirmation. |
@@ -266,6 +266,32 @@ tether profile add quilr-us --type quilr --region usa-1 --bedrock-backed   # gat
 Switching profiles first clears every key tether owns. For example, a leftover
 `CLAUDE_CODE_USE_BEDROCK` can't survive a switch to Quilr, where it would silently
 turn off gateway model discovery.
+
+### Quilr Bedrock route (`--type quilr-bedrock`, experimental)
+
+For a Quilr key created for the **`bedrock`** provider type. Claude Code runs in its
+Bedrock mode against Quilr's `/bedrock-runtime` route and signs each request (AWS
+SigV4) with the Quilr key:
+
+```sh
+tether profile add quilr-br --type quilr-bedrock --region auto --email you@company.com --label claude-code \
+     --sonnet <bedrock-model-id> --haiku <bedrock-model-id> && tether use quilr-br --yes && tether doctor quilr-br
+```
+
+`use` writes `CLAUDE_CODE_USE_BEDROCK=1`, `ANTHROPIC_BEDROCK_BASE_URL=https://guardrails.quilr.ai/bedrock-runtime`,
+`AWS_REGION` (`--aws-region`, default `us-east-1`) and the model pins, plus
+`"awsCredentialExport": "<tether> aws-credentials quilr-br"`. Claude Code runs that
+command to get the key from the keychain as AWS credentials (Claude Code v2.1.206+),
+so the key is never written to `settings.json` or `~/.aws`.
+
+- **Pin models.** The Bedrock route has no model listing, so pin Bedrock model IDs
+  that are enabled on your key. `tether doctor` checks each pin.
+- **Streaming must be enabled on the gateway.** Claude Code streams every response.
+  If `doctor` check 4 reports *"Bedrock boto3 streaming is not enabled on this
+  gateway"*, Claude Code can't run on this route until Quilr enables it. Use an
+  `anthropic_messages` key (`--type quilr`) in the meantime.
+- `--plaintext` and `tether models` don't apply to this type. `export-managed` turns
+  `--api-key-helper CMD` into `awsCredentialExport`.
 
 ## `tether doctor`
 

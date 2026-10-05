@@ -47,6 +47,7 @@ func commands() []command {
 		{"export-managed", "write a managed-settings.json for MDM rollout", "export-managed <name> -o FILE [--plist FILE] [--enforce] [--lock-provider] [--api-key-helper CMD] [--keep-user-email] [--no-key-note]", cmdExportManaged, false},
 		{"restore", "restore a settings backup (default: latest for --scope)", "restore [timestamp] [--list]", cmdRestore, false},
 		{"key", "print a profile's key (used by Claude Code's apiKeyHelper)", "key <name>", cmdKey, true},
+		{"aws-credentials", "print a quilr-bedrock profile's key as AWS credentials (used by awsCredentialExport)", "aws-credentials <name>", cmdAWSCredentials, true},
 		{"version", "print the version", "version", func(c *Ctx, _ []string) error { c.UI.Println("tether " + Version); return nil }, false},
 	}
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -328,5 +329,121 @@ func TestKeyProblemNamesMatchingProvider(t *testing.T) {
 				t.Errorf("%s: missing %q in %q / %q", have, w, summary, fix)
 			}
 		}
+	}
+}
+
+// --- quilr-bedrock --------------------------------------------------------------
+
+func setupBedrockDoctor(t *testing.T, streaming http.HandlerFunc) (*sandbox, *fakeGateway) {
+	s := newSandbox(t)
+	g := newFakeGateway(t)
+	g.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		g.requests = append(g.requests, r.Clone(r.Context()))
+		g.mu.Unlock()
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential="+testKey+"/") ||
+			!strings.Contains(r.Header.Get("Authorization"), "/us-east-1/bedrock/aws4_request") {
+			writeJSONResp(w, 401, map[string]any{"__type": "UnrecognizedClientException", "message": "Missing or invalid AWS Signature Version 4 Authorization header"})
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/invoke-with-response-stream"):
+			streaming(w, r)
+		case strings.HasSuffix(r.URL.Path, "/invoke"):
+			if strings.Contains(r.URL.EscapedPath(), "us.anthropic.claude-sonnet-4-6") {
+				writeJSONResp(w, 200, map[string]any{"content": []any{map[string]any{"type": "text", "text": "pong"}}})
+				return
+			}
+			writeJSONResp(w, 403, map[string]any{"__type": "AccessDeniedException", "message": "Model is not enabled for this Quilr API key"})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	s.t.Setenv("TEST_QUILR_KEY", testKey)
+	s.ok("profile", "add", "qb", "--type", "quilr-bedrock", "--base-url", g.URL+"/bedrock-runtime",
+		"--sonnet", "us.anthropic.claude-sonnet-4-6", "--key-env", "TEST_QUILR_KEY")
+	s.ok("use", "qb", "--yes")
+	return s, g
+}
+
+func eventStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+	w.WriteHeader(200)
+	for i := 0; i < 4; i++ {
+		_, _ = w.Write([]byte("\x00\x00\x00\x40:event-type chunk {\"bytes\":\"...\"}"))
+		w.(http.Flusher).Flush()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestQuilrBedrockUseWritesBedrockSettings(t *testing.T) {
+	s, _ := setupBedrockDoctor(t, eventStream)
+	got := s.readJSON(s.userPath())
+	env := envOf(got)
+	for k, want := range map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": "us-east-1",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-4-6"} {
+		if v, _ := env.GetString(k); v != want {
+			t.Errorf("env.%s = %q, want %q", k, v, want)
+		}
+	}
+	if v, _ := env.GetString("ANTHROPIC_BEDROCK_BASE_URL"); !strings.HasSuffix(v, "/bedrock-runtime") {
+		t.Errorf("base url %q", v)
+	}
+	if env.Has("ANTHROPIC_BASE_URL") || env.Has("AWS_ACCESS_KEY_ID") || got.Has("apiKeyHelper") {
+		t.Fatal("unexpected keys")
+	}
+	if h, _ := got.GetString("awsCredentialExport"); !strings.HasSuffix(h, " aws-credentials qb") {
+		t.Fatalf("awsCredentialExport = %q", h)
+	}
+	raw, _ := os.ReadFile(s.userPath())
+	assertNoKey(t, string(raw))
+	r := s.ok("aws-credentials", "qb")
+	if r.out != `{"Credentials":{"AccessKeyId":"`+testKey+`","SecretAccessKey":"`+testKey+`"}}` {
+		t.Fatalf("credentials output %q", r.out)
+	}
+	// Switching to a quilr profile clears every Bedrock key.
+	s.addQuilr("qi")
+	s.ok("use", "qi", "--yes")
+	got = s.readJSON(s.userPath())
+	if envOf(got).Has("CLAUDE_CODE_USE_BEDROCK") || envOf(got).Has("ANTHROPIC_BEDROCK_BASE_URL") || got.Has("awsCredentialExport") {
+		t.Fatalf("stale bedrock keys: %s", jsonString(got))
+	}
+}
+
+func TestQuilrBedrockDoctorPasses(t *testing.T) {
+	s, g := setupBedrockDoctor(t, eventStream)
+	rep, r := s.doctor("qb")
+	if r.code != ExitOK {
+		t.Fatalf("exit %d\n%s", r.code, r.out)
+	}
+	for id, want := range map[int]string{3: "pass", 4: "pass", 5: "skip", 6: "skip", 7: "pass", 8: "pass"} {
+		if c := rep.check(id); c.Status != want {
+			t.Errorf("check %d: %+v", id, c)
+		}
+	}
+	for _, req := range g.requests {
+		if req.Header.Get("X-Conversation-Id") != rep.Tag {
+			t.Error("missing tag")
+		}
+	}
+}
+
+func TestQuilrBedrockDoctorStreamingDisabled(t *testing.T) {
+	s, _ := setupBedrockDoctor(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResp(w, 400, map[string]any{"message": "Bedrock boto3 streaming is not enabled on this gateway yet. Use non-streaming converse/invoke_model for now."})
+	})
+	rep, r := s.doctor("qb")
+	c := rep.check(4)
+	if r.code != ExitDoctorFailed || c.Status != "fail" || !strings.Contains(c.Fix, "until Quilr enables Bedrock streaming") {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestQuilrBedrockDoctorModelNotEnabled(t *testing.T) {
+	s, _ := setupBedrockDoctor(t, eventStream)
+	s.ok("pin", "qb", "--sonnet", "us.anthropic.claude-other-v1:0")
+	rep, _ := s.doctor("qb")
+	if c := rep.check(3); c.Status != "fail" || !strings.Contains(c.Fix, "tether pin qb") {
+		t.Fatalf("%+v", c)
 	}
 }

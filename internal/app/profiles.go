@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	ProfileTypes = []string{"quilr", "anthropic", "bedrock"}
+	ProfileTypes = []string{"quilr", "quilr-bedrock", "anthropic", "bedrock"}
 	Tiers        = []string{"opus", "sonnet", "haiku", "fable"}
 
 	QuilrRegions = map[string]string{
@@ -31,13 +31,17 @@ var (
 	modelIDRE = regexp.MustCompile(`^\S+$`)
 )
 
-const quilrPath = "/anthropic_messages"
+const (
+	quilrPath        = "/anthropic_messages"
+	quilrBedrockPath = "/bedrock-runtime"
+	defaultAWSRegion = "us-east-1"
+)
 
 // Profile is one entry in profiles.toml. Keys are never stored here.
 type Profile struct {
 	Name string `toml:"-"`
 	Type string `toml:"type"`
-	// quilr
+	// quilr and quilr-bedrock
 	Region             string `toml:"region,omitempty"`
 	BaseURL            string `toml:"base_url,omitempty"` // overrides region, e.g. staging
 	Email              string `toml:"email,omitempty"`
@@ -46,7 +50,7 @@ type Profile struct {
 	DiscoveryTimeoutMS int    `toml:"discovery_timeout_ms,omitempty"`
 	BedrockBacked      bool   `toml:"bedrock_backed,omitempty"`
 	KeyBackend         string `toml:"key_backend,omitempty"`
-	// bedrock
+	// bedrock (aws_region is also the SigV4 signing region for quilr-bedrock)
 	AWSRegion  string `toml:"aws_region,omitempty"`
 	AWSProfile string `toml:"aws_profile,omitempty"`
 	SSORefresh bool   `toml:"sso_refresh,omitempty"`
@@ -77,9 +81,9 @@ func (p *Profile) Validate() error {
 		return err
 	}
 	if !contains(ProfileTypes, p.Type) {
-		return usageErr("", "unknown profile type %q; expected quilr, anthropic or bedrock", p.Type)
+		return usageErr("", "unknown profile type %q; expected quilr, quilr-bedrock, anthropic or bedrock", p.Type)
 	}
-	if p.Type == "quilr" && p.BaseURL == "" {
+	if p.IsQuilr() && p.BaseURL == "" {
 		if _, ok := QuilrRegions[p.Region]; !ok {
 			return usageErr("", "unknown Quilr region %q; expected %s", p.Region, strings.Join(QuilrRegionNames, ", "))
 		}
@@ -95,11 +99,26 @@ func (p *Profile) Validate() error {
 	return nil
 }
 
-func (p *Profile) NeedsKey() bool { return p.Type == "quilr" }
+// IsQuilr is true for both Quilr routes: quilr (/anthropic_messages, the
+// Anthropic Messages format) and quilr-bedrock (/bedrock-runtime, the Bedrock
+// Runtime format signed with the Quilr key).
+func (p *Profile) IsQuilr() bool { return p.Type == "quilr" || p.Type == "quilr-bedrock" }
+
+func (p *Profile) NeedsKey() bool { return p.IsQuilr() }
+
+// SigningRegion is the AWS region quilr-bedrock signs requests for.
+func (p *Profile) SigningRegion() string {
+	if p.AWSRegion != "" {
+		return p.AWSRegion
+	}
+	return defaultAWSRegion
+}
 
 func (p *Profile) DiscoveryOn() bool { return p.Discovery == nil || *p.Discovery }
 
-// GatewayRoot is the ANTHROPIC_BASE_URL value, never with a trailing slash.
+// GatewayRoot is the gateway URL Claude Code is pointed at, never with a
+// trailing slash: ANTHROPIC_BASE_URL for quilr, ANTHROPIC_BEDROCK_BASE_URL for
+// quilr-bedrock.
 func (p *Profile) GatewayRoot() string {
 	if p.BaseURL != "" {
 		return strings.TrimRight(p.BaseURL, "/")
@@ -107,6 +126,9 @@ func (p *Profile) GatewayRoot() string {
 	region := p.Region
 	if region == "" {
 		region = "auto"
+	}
+	if p.Type == "quilr-bedrock" {
+		return QuilrRegions[region] + quilrBedrockPath
 	}
 	return QuilrRegions[region] + quilrPath
 }
@@ -136,6 +158,8 @@ func (p *Profile) Target() string {
 	switch p.Type {
 	case "quilr":
 		return p.GatewayRoot()
+	case "quilr-bedrock":
+		return p.GatewayRoot() + " (Bedrock format, " + p.SigningRegion() + ")"
 	case "bedrock":
 		return "bedrock " + p.AWSRegion + " (AWS profile " + p.AWSProfile + ")"
 	}
@@ -154,7 +178,7 @@ func sortedKeys(m map[string]string) []string {
 // FragmentOpts selects how the key is delivered.
 type FragmentOpts struct {
 	Scope         string
-	HelperCommand string // apiKeyHelper value
+	HelperCommand string // apiKeyHelper (quilr) or awsCredentialExport (quilr-bedrock) value
 	PlaintextKey  string // env.ANTHROPIC_API_KEY value
 	OmitEmail     bool   // managed export: X-User-Email is per-user
 }
@@ -185,6 +209,17 @@ func BuildFragment(p *Profile, o FragmentOpts) Fragment {
 		}
 		if p.BedrockBacked {
 			f.Env.Set("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")
+		}
+	}
+	if p.Type == "quilr-bedrock" {
+		f.Env.Set("CLAUDE_CODE_USE_BEDROCK", "1")
+		f.Env.Set("ANTHROPIC_BEDROCK_BASE_URL", p.GatewayRoot())
+		f.Env.Set("AWS_REGION", p.SigningRegion())
+		if o.HelperCommand != "" {
+			f.Top.Set("awsCredentialExport", o.HelperCommand)
+		}
+		if h := p.CustomHeaders(!o.OmitEmail); h != "" {
+			f.Env.Set("ANTHROPIC_CUSTOM_HEADERS", h)
 		}
 	}
 	if p.Type == "bedrock" {

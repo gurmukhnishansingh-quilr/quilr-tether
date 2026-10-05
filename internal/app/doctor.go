@@ -344,7 +344,7 @@ func (d *doctorRun) checkModelsEnabled() Check {
 func (d *doctorRun) run() ([]Check, error) {
 	states := LoadScopes(d.project)
 	checks := []Check{d.checkSettings(states), d.checkPrecedence(states)}
-	if d.p.Type != "quilr" {
+	if !d.p.IsQuilr() {
 		return append(checks, nonGatewayChecks(d.p)...), nil
 	}
 	key, err := ReadKey(d.p.Name, d.p.KeyBackend)
@@ -356,6 +356,12 @@ func (d *doctorRun) run() ([]Check, error) {
 			Fix: fmt.Sprintf("tether profile set-key %s", d.p.Name)}), nil
 	}
 	d.key = key
+	if d.p.Type == "quilr-bedrock" {
+		checks = append(checks, d.bedrockChecks()...)
+		sort.SliceStable(checks, func(i, j int) bool { return checks[i].ID < checks[j].ID })
+		collapseKeyProblems(checks, d.p.Name)
+		return checks, nil
+	}
 	discovery := d.checkDiscovery() // first, so the ping can use a discovered model
 	model := d.pickModel()
 	checks = append(checks, d.checkInference(model), d.checkStreaming(model), d.checkBeta(model),

@@ -25,8 +25,13 @@ func DetectActive(data *ojson.Object, scope string, known map[string]*Profile) s
 		if p.NeedsKey() {
 			if k, ok := view.Env.GetString("ANTHROPIC_API_KEY"); ok {
 				opts.PlaintextKey = k
-			} else if h, ok := view.Top.GetString("apiKeyHelper"); ok {
+			} else if h, ok := view.Top.GetString("apiKeyHelper"); ok && p.Type == "quilr" {
 				if !strings.HasSuffix(h, " key "+name) {
+					continue
+				}
+				opts.HelperCommand = h
+			} else if h, ok := view.Top.GetString("awsCredentialExport"); ok && p.Type == "quilr-bedrock" {
+				if !strings.HasSuffix(h, " aws-credentials "+name) {
 					continue
 				}
 				opts.HelperCommand = h
@@ -116,8 +121,8 @@ func cmdProfile(c *Ctx, args []string) error {
 }
 
 func cmdProfileAdd(c *Ctx, args []string) error {
-	fs := newFlagSet(c, "profile add", "profile add <name> --type quilr|anthropic|bedrock [options]")
-	ptype := fs.String("type", "", "quilr, anthropic or bedrock")
+	fs := newFlagSet(c, "profile add", "profile add <name> --type quilr|quilr-bedrock|anthropic|bedrock [options]")
+	ptype := fs.String("type", "", "quilr, quilr-bedrock, anthropic or bedrock")
 	force := fs.Bool("force", false, "replace an existing profile")
 	region := fs.String("region", "", "Quilr region (auto, usa-1, usa-2, india-1, jp-1); for bedrock, the AWS region")
 	baseURL := fs.String("base-url", "", "explicit gateway URL instead of a region")
@@ -130,7 +135,7 @@ func cmdProfileAdd(c *Ctx, args []string) error {
 	key := fs.String("key", "", "API key (visible in shell history; prefer --key-stdin)")
 	keyStdin := fs.Bool("key-stdin", false, "read the API key from stdin")
 	keyEnv := fs.String("key-env", "", "read the API key from this environment variable")
-	awsRegion := fs.String("aws-region", "", "AWS region (bedrock)")
+	awsRegion := fs.String("aws-region", "", "AWS region (bedrock; signing region for quilr-bedrock, default us-east-1)")
 	awsProfile := fs.String("aws-profile", "", "AWS profile (bedrock)")
 	sso := fs.Bool("sso-refresh", false, `set awsAuthRefresh to "aws sso login --profile <p>"`)
 	model := fs.String("model", "", "default model (settings `model`)")
@@ -191,7 +196,7 @@ func cmdProfileAdd(c *Ctx, args []string) error {
 
 	var newKey string
 	switch t {
-	case "quilr":
+	case "quilr", "quilr-bedrock":
 		if *baseURL != "" {
 			p.BaseURL = *baseURL
 		} else if p.Region = *region; p.Region == "" {
@@ -209,18 +214,41 @@ func cmdProfileAdd(c *Ctx, args []string) error {
 				return err
 			}
 		}
-		on := true
-		switch {
-		case *noDisc:
-			on = false
-		case !*disc:
-			on = c.UI.AskBool("Enable gateway model discovery?", true)
+		if t == "quilr" {
+			on := true
+			switch {
+			case *noDisc:
+				on = false
+			case !*disc:
+				on = c.UI.AskBool("Enable gateway model discovery?", true)
+			}
+			if !on {
+				p.Discovery = &on
+			}
+			p.DiscoveryTimeoutMS = *discTimeout
+			p.BedrockBacked = *bedrockBacked
+		} else {
+			// The Bedrock route has no model listing, so Claude Code needs
+			// pinned Bedrock model IDs that are enabled on the key.
+			p.AWSRegion = *awsRegion
+			if len(p.Pins) == 0 && c.UI.Interactive {
+				for _, tier := range []string{"sonnet", "haiku", "opus"} {
+					v, err := c.UI.Ask("Bedrock model id for "+tier+" (enabled on the key)", "--"+tier, "", nil, false)
+					if err != nil {
+						return err
+					}
+					if v != "" {
+						if p.Pins[tier], err = validateModelID(v); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			if len(p.Pins) == 0 && p.Model == "" {
+				c.UI.Warn("no models pinned; Claude Code will use its own Bedrock defaults, which may not be enabled on "+
+					"your Quilr key. Pin them with: tether pin %s --sonnet ID --haiku ID", name)
+			}
 		}
-		if !on {
-			p.Discovery = &on
-		}
-		p.DiscoveryTimeoutMS = *discTimeout
-		p.BedrockBacked = *bedrockBacked
 		if newKey, err = readKeyInput(c, *key, *keyStdin, *keyEnv); err != nil {
 			return err
 		}
@@ -338,12 +366,16 @@ func profileSummary(p *Profile) *ojson.Object {
 		if p.ProviderLabel != "" {
 			o.Set("provider_label", p.ProviderLabel)
 		}
-		o.Set("discovery", p.DiscoveryOn())
-		if p.DiscoveryTimeoutMS > 0 {
-			o.Set("discovery_timeout_ms", p.DiscoveryTimeoutMS)
-		}
-		if p.BedrockBacked {
-			o.Set("bedrock_backed", true)
+		if p.Type == "quilr" {
+			o.Set("discovery", p.DiscoveryOn())
+			if p.DiscoveryTimeoutMS > 0 {
+				o.Set("discovery_timeout_ms", p.DiscoveryTimeoutMS)
+			}
+			if p.BedrockBacked {
+				o.Set("bedrock_backed", true)
+			}
+		} else {
+			o.Set("aws_region", p.SigningRegion())
 		}
 	}
 	if p.Type == "bedrock" && p.SSORefresh {
@@ -542,8 +574,8 @@ func planUse(c *Ctx, name string, plaintext bool) (*usePlan, error) {
 	if err := checkPlaintextScope(c.Scope, plaintext); err != nil {
 		return nil, err
 	}
-	if plaintext && !p.NeedsKey() {
-		return nil, usageErr("", "--plaintext only applies to Quilr profiles; %q is %s", p.Name, p.Type)
+	if plaintext && p.Type != "quilr" {
+		return nil, usageErr("", "--plaintext only applies to quilr profiles; %q is %s", p.Name, p.Type)
 	}
 	path, err := c.target()
 	if err != nil {
@@ -563,6 +595,9 @@ func planUse(c *Ctx, name string, plaintext bool) (*usePlan, error) {
 			opts.PlaintextKey = key
 		} else {
 			opts.HelperCommand = HelperCommand(p.Name)
+			if p.Type == "quilr-bedrock" {
+				opts.HelperCommand = AWSCredentialCommand(p.Name)
+			}
 		}
 	}
 	next, err := ApplyFragment(current, BuildFragment(p, opts))
@@ -708,6 +743,33 @@ func cmdRestore(c *Ctx, args []string) error {
 	}
 	c.UI.Println(c.UI.C(fmt.Sprintf("Restored %s from backup %s.", path, b.Timestamp), "green"))
 	return nil
+}
+
+// cmdAWSCredentials is what awsCredentialExport runs for quilr-bedrock: the
+// Quilr key as static AWS credentials (Quilr verifies SigV4 signed with the
+// key as both access key ID and secret). Like `key`, it never prints to a
+// terminal.
+func cmdAWSCredentials(c *Ctx, args []string) error {
+	fs := newFlagSet(c, "aws-credentials", "aws-credentials <name>")
+	pos, err := parseArgs(c, fs, args, 1, 1)
+	if err != nil {
+		return err
+	}
+	if f, ok := c.UI.Out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return usageErr("this command exists for Claude Code's awsCredentialExport; use `tether profile show` to see the masked key",
+			"refusing to print credentials to a terminal")
+	}
+	p, err := GetProfile(pos[0])
+	if err != nil {
+		return err
+	}
+	key, err := RequireKey(p.Name, p.KeyBackend)
+	if err != nil {
+		return err
+	}
+	out, _ := json.Marshal(map[string]any{"Credentials": map[string]string{"AccessKeyId": key, "SecretAccessKey": key}})
+	_, err = fmt.Fprint(c.UI.Out, string(out))
+	return err
 }
 
 // cmdKey is what apiKeyHelper runs. It writes the raw key to stdout, so it
@@ -953,6 +1015,10 @@ func cmdModels(c *Ctx, args []string) error {
 		return err
 	}
 	if p.Type != "quilr" {
+		if p.Type == "quilr-bedrock" {
+			return usageErr("pin Bedrock model IDs enabled on your key with `tether pin "+p.Name+" --sonnet ID`, then check them with `tether doctor`",
+				"the Quilr Bedrock route has no model listing")
+		}
 		return usageErr("", "model listing needs a gateway profile; %q is %s", p.Name, p.Type)
 	}
 	entries, fetchedAt, cached, err := fetchModels(p, *refresh)

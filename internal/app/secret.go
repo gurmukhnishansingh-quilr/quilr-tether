@@ -149,3 +149,9 @@ func quoteArg(arg string) string {
 func HelperCommand(name string) string {
 	return quoteArg(selfPath()) + " key " + name
 }
+
+// AWSCredentialCommand is the awsCredentialExport value for quilr-bedrock:
+// this binary, printing the Quilr key as AWS credentials JSON.
+func AWSCredentialCommand(name string) string {
+	return quoteArg(selfPath()) + " aws-credentials " + name
+}
