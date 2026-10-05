@@ -230,7 +230,8 @@ To apply a profile to one project instead of everywhere, add `--scope local`
 | `allow <name> --models a,b,c [--enforce]` | Set `availableModels` (and `enforceAvailableModels` in managed scope). |
 | `override <name> <anthropic-id>=<gateway-id> ...` | Set `modelOverrides`. |
 | `export-managed <name> -o file [--plist f] [--lock-provider]` | Write a rollout file for Intune or Jamf. |
-| `restore [timestamp] [--list]` | Restore a backup. Defaults to the latest backup for `--scope`. |
+| `restore [timestamp] [--list] [--mcp]` | Restore a backup. Defaults to the latest backup for `--scope`; `--mcp` restores `~/.claude.json`. |
+| `mcp add\|list\|show\|use\|diff\|doctor\|set-key\|remove` | Add Quilr MCP Gateway servers to Claude Code (user scope). See [MCP Gateway](#mcp-gateway). |
 
 `pin`, `allow` and `override` edit the profile. Run `tether use <name>` afterwards to apply the change.
 
@@ -309,6 +310,80 @@ so the key is never written to `settings.json` or `~/.aws`.
 
 All HTTP requests honour `HTTPS_PROXY` and never follow redirects.
 
+## MCP Gateway
+
+tether also adds [Quilr MCP Gateway](https://docs.quilrai.dev/category/mcp-gateway)
+servers to Claude Code. Only **user scope** is supported for now: the server goes
+into the top-level `mcpServers` of `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json`
+when that is set) and loads in every project. Project (`.mcp.json`), local and
+managed (`managed-mcp.json`) scopes are not supported yet.
+
+```sh
+# A single MCP, with an API token (Settings → API Tokens in Quilr). The token is
+# read without echo and stored in the OS keychain.
+tether mcp add quilr-github --slug github-prod --email you@company.com
+#   (non-interactive:  printf '%s\n' "$QUILR_MCP_TOKEN" | tether mcp add ... --key-stdin)
+
+# OneMCP: every MCP you may use, behind one endpoint. With --auth oauth, Claude
+# Code signs in itself (/mcp) and tether stores no token.
+tether mcp add quilr-one --onemcp --auth oauth
+
+tether mcp diff quilr-github      # preview
+tether mcp use quilr-github       # backs up ~/.claude.json, then asks before writing
+tether mcp doctor quilr-github    # live check: initialize + tools/list
+```
+
+`mcp use` writes only its own entry. Other MCP servers and the rest of
+`~/.claude.json` stay as they are:
+
+```json
+{
+  "mcpServers": {
+    "quilr-github": {
+      "type": "http",
+      "url": "https://mcpgateway.quilr.ai/github-prod/mcp",
+      "headersHelper": "/usr/local/bin/tether mcp-headers quilr-github"
+    },
+    "quilr-one": {
+      "type": "http",
+      "url": "https://mcpgateway.quilr.ai/quilrone/mcp"
+    }
+  }
+}
+```
+
+Claude Code runs `tether mcp-headers quilr-github`, which prints
+`{"Authorization": "Bearer <token>", "mcpuser": "you@company.com"}`. The token stays
+in the keychain, and `mcp-headers` refuses to print to a terminal.
+
+| Option | Meaning |
+|---|---|
+| `--slug SLUG` | The MCP's slug, from its endpoint `https://<gateway>/<slug>/mcp` on the MCP card |
+| `--onemcp` | Use the OneMCP endpoint (`/quilrone/mcp`) instead of `--slug` |
+| `--domain quilr.ai\|quilrai.com` | Gateway domain (default `quilr.ai`). Or `--base-url URL` for any other gateway |
+| `--auth token\|oauth` | `token` (default): API token through `headersHelper`. `oauth`: no token; sign in with `/mcp` in Claude Code |
+| `--email` | Sent as `mcpuser`. Required for `--auth token`, except with `--onemcp`. Must be on an allowed company domain |
+| `--key-stdin` / `--key-env VAR` / `--key TOKEN` | How the API token is passed, as for `profile add` |
+
+Restart Claude Code after `mcp use`. To change the token, run `tether mcp set-key <name>`.
+To remove the server from Claude Code and delete its token, run `tether mcp remove <name> --yes`.
+`tether restore --mcp` puts `~/.claude.json` back as it was before tether's last change.
+
+`mcp use` refuses to replace an existing `mcpServers` entry with the same name that
+tether didn't create (pass `--force` to replace it). Claude Code also rewrites
+`~/.claude.json` while it runs, so close Claude Code sessions before `mcp use` or
+`mcp remove`.
+
+`tether mcp doctor` checks:
+
+| # | Check | Fails when |
+|---|---|---|
+| 1 | Claude config | The entry is missing from `~/.claude.json` or belongs to another server. Warns when it was edited by hand |
+| 2 | Credentials | No token is stored (`--auth token`) |
+| 3 | Managed policy | A `managed-mcp.json` exists (only its servers load), or `deniedMcpServers` / `allowedMcpServers` in managed settings blocks the server |
+| 4 | Initialize | The MCP `initialize` request doesn't return 200: bad token, `mcpuser` not allowed, unknown slug, redirect. For `--auth oauth`, a 401 means "reachable, sign in with /mcp" and passes |
+| 5 | Tools | `tools/list` fails. Warns when the MCP exposes no tools |
+
 ## Team rollout
 
 ```sh
@@ -372,6 +447,9 @@ profile is still applied anywhere.
 | `install.sh` | `rm /usr/local/bin/tether` (or `rm ~/.local/bin/tether`) |
 | `install.ps1` | `Remove-Item -Recurse "$env:LOCALAPPDATA\Programs\tether"`, then remove that folder from your user PATH |
 
+If you added MCP servers, remove each one before uninstalling, since Claude Code runs
+tether for their headers: `tether mcp remove <name> --yes`.
+
 **Optional cleanup** of profiles, the model cache and tether's settings backups. Keep
 the backups if you might want an older `settings.json` back.
 
@@ -400,6 +478,7 @@ tether profile add direct --type anthropic; tether use direct --yes; tether prof
 | Profiles | `~/.config/tether/profiles.toml` (`%APPDATA%\tether\profiles.toml` on Windows). Override with `TETHER_CONFIG_DIR` |
 | Backups | `~/.claude/backups/settings.<timestamp>.json` plus a `.meta` sidecar. The last 20 are kept |
 | Model cache | `<config>/cache/models-<profile>.json` |
+| MCP servers | `<config>/mcp.toml` (no tokens), written into `~/.claude.json` by `tether mcp use` |
 
 `CLAUDE_CONFIG_DIR` is honoured the same way Claude Code honours it. See
 [DESIGN.md](DESIGN.md) for ownership and precedence rules.

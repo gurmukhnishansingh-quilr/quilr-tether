@@ -56,6 +56,42 @@ the user had before tether touched it. The tests check this byte for byte.
 `doctor` rebuild each profile's fragment and compare it with the owned keys in
 the file. Hand edits show up as "none matches".
 
+## MCP servers
+
+`tether mcp` adds Quilr MCP Gateway servers to Claude Code. Only user scope is
+supported: the top-level `mcpServers` object in `~/.claude.json`
+(`$CLAUDE_CONFIG_DIR/.claude.json` when set). That file is Claude Code's global
+config, not a settings file, so `--scope` other than `user` is refused.
+
+- **Ownership is per entry, not per key.** MCP servers are additive, so the
+  "clear every owned key" model above doesn't apply. tether owns an
+  `mcpServers` entry when its name is in `mcp.toml` and it is the entry tether
+  would write, or its `headersHelper` ends in `mcp-headers <name>`. `mcp use`
+  refuses to replace any other entry of the same name without `--force`;
+  `mcp remove` leaves such an entry alone. tether deletes `mcpServers` only
+  when removing its own last entry.
+- **Only `mcpServers` is diffed.** `~/.claude.json` is large and holds Claude
+  Code state. The preview shows `mcpServers` alone, with secret `headers` and
+  `env` values of other servers masked. The whole file is still backed up
+  first, re-serialized with key order and number formatting preserved, and
+  `restore --mcp` puts it back.
+- **Tokens go through `headersHelper`.** `mcp-headers <name>` prints
+  `{"Authorization": "Bearer …", "mcpuser": "…"}`. The token sits in the keychain
+  under `mcp.<name>`. Profile names can't contain `.`, so this never collides
+  with an LLM profile's key. OAuth entries carry no headers; Claude Code signs
+  in through `/mcp`.
+- **`mcp.toml` is separate from `profiles.toml`**, because older tether
+  versions reject unknown fields in `profiles.toml`.
+- **`mcp doctor`** speaks Streamable HTTP: `initialize` (JSON or SSE reply,
+  `Mcp-Session-Id` kept), `notifications/initialized`, then `tools/list`. It
+  mirrors Claude Code's managed controls: `managed-mcp.json` takes exclusive
+  control, and `allowedMcpServers`/`deniedMcpServers` match by `serverName` or
+  `serverUrl` wildcard (case-insensitive).
+
+Claude Code rewrites `~/.claude.json` while it runs, so a write can race with a
+running session. tether keeps the read-modify-write short, and the README says to
+close Claude Code first.
+
 ## Writes
 
 Every write follows the same sequence:

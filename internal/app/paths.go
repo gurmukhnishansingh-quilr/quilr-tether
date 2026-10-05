@@ -61,6 +61,16 @@ func ConfigDir() string {
 	return filepath.Join(homeDir(), ".config", "tether")
 }
 
+// ClaudeJSONPath is Claude Code's global config, which holds user-scope MCP
+// servers (top-level mcpServers): $CLAUDE_CONFIG_DIR/.claude.json when set,
+// else ~/.claude.json (next to ~/.claude, not inside it).
+func ClaudeJSONPath() string {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, ".claude.json")
+	}
+	return filepath.Join(homeDir(), ".claude.json")
+}
+
 func BackupsDir() string { return filepath.Join(ClaudeHome(), "backups") }
 
 // FindProjectRoot returns the nearest ancestor containing .git, else start.

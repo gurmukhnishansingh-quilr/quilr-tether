@@ -664,8 +664,9 @@ func cmdDiff(c *Ctx, args []string) error {
 }
 
 func cmdRestore(c *Ctx, args []string) error {
-	fs := newFlagSet(c, "restore", "restore [timestamp] [--scope ...] [--list]")
+	fs := newFlagSet(c, "restore", "restore [timestamp] [--scope ...] [--mcp] [--list]")
 	list := fs.Bool("list", false, "list backups")
+	mcp := fs.Bool("mcp", false, "restore "+ClaudeJSONPath()+" (user-scope MCP servers) instead of settings.json")
 	pos, err := parseArgs(c, fs, args, 0, 1)
 	if err != nil {
 		return err
@@ -691,6 +692,12 @@ func cmdRestore(c *Ctx, args []string) error {
 	target, err := c.target()
 	if err != nil {
 		return err
+	}
+	if *mcp {
+		if err := requireUserScope(c); err != nil {
+			return err
+		}
+		target = ClaudeJSONPath()
 	}
 	b, err := FindBackup(ts, target)
 	if err != nil {
