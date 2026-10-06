@@ -104,6 +104,33 @@ func MaskSettings(s *ojson.Object) *ojson.Object {
 	return out
 }
 
+// MaskMCPServers returns a copy of an mcpServers object with secret header
+// and env values masked.
+func MaskMCPServers(servers *ojson.Object) *ojson.Object {
+	out := servers.Clone()
+	for _, name := range out.Keys() {
+		srv, ok := out.GetObject(name)
+		if !ok {
+			continue
+		}
+		if h, ok := srv.GetObject("headers"); ok {
+			for _, k := range h.Keys() {
+				if v, ok := h.GetString(k); ok && (secretHeader.MatchString(k) || isSecretName(strings.ReplaceAll(k, "-", "_"))) {
+					h.Set(k, Mask(v))
+				}
+			}
+		}
+		if env, ok := srv.GetObject("env"); ok {
+			for _, k := range env.Keys() {
+				if v, ok := env.GetString(k); ok && isSecretName(k) {
+					env.Set(k, Mask(v))
+				}
+			}
+		}
+	}
+	return out
+}
+
 // maskEnvValue masks a single env value for display.
 func maskEnvValue(k, v string) string {
 	if isSecretName(k) {

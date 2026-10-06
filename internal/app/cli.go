@@ -44,10 +44,12 @@ func commands() []command {
 		{"pin", "pin ANTHROPIC_DEFAULT_*_MODEL ids on a profile ('' unpins)", "pin <name> [--opus ID] [--sonnet ID] [--haiku ID] [--fable ID] [--clear]", cmdPin, false},
 		{"allow", "set availableModels on a profile", "allow <name> --models a,b,c [--enforce] | --clear", cmdAllow, false},
 		{"override", "set modelOverrides entries on a profile", "override <name> <anthropic-id>=<gateway-id> ... [--remove ID] [--clear]", cmdOverride, false},
+		{"mcp", "add Quilr MCP Gateway servers to Claude Code (user scope)", "mcp add|list|show|use|diff|doctor|set-key|remove ...", cmdMCP, false},
 		{"export-managed", "write a managed-settings.json for MDM rollout", "export-managed <name> -o FILE [--plist FILE] [--enforce] [--lock-provider] [--api-key-helper CMD] [--keep-user-email] [--no-key-note]", cmdExportManaged, false},
 		{"restore", "restore a settings backup (default: latest for --scope)", "restore [timestamp] [--list]", cmdRestore, false},
 		{"key", "print a profile's key (used by Claude Code's apiKeyHelper)", "key <name>", cmdKey, true},
 		{"aws-credentials", "print a quilr-bedrock profile's key as AWS credentials (used by awsCredentialExport)", "aws-credentials <name>", cmdAWSCredentials, true},
+		{"mcp-headers", "print an MCP server's auth headers (used by Claude Code's headersHelper)", "mcp-headers <name>", cmdMCPHeaders, true},
 		{"version", "print the version", "version", func(c *Ctx, _ []string) error { c.UI.Println("tether " + Version); return nil }, false},
 	}
 }

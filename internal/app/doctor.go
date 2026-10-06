@@ -422,21 +422,25 @@ func cmdDoctor(c *Ctx, args []string) error {
 			"elapsed_ms": time.Since(started).Milliseconds(), "checks": checks})
 	} else {
 		c.UI.Println(c.UI.C(fmt.Sprintf("tether doctor: %s (%s)", p.Name, p.Target()), "bold"))
-		colors := map[string]string{"pass": "green", "warn": "yellow", "fail": "red", "skip": "dim"}
-		counts := map[string]int{}
-		for _, ch := range checks {
-			counts[ch.Status]++
-			c.UI.Printf(" %s  %2d. %-17s %s\n", c.UI.C(fmt.Sprintf("%-4s", strings.ToUpper(ch.Status)), colors[ch.Status]), ch.ID, ch.Name, ch.Detail)
-			if ch.Fix != "" && (ch.Status == "warn" || ch.Status == "fail") {
-				c.UI.Printf("%26sfix: %s\n", "", ch.Fix)
-			}
-		}
-		c.UI.Printf("\n%d passed, %d warnings, %d failed\n", counts["pass"], counts["warn"], counts["fail"])
+		printChecks(c, checks)
 	}
 	if failed {
 		return &Error{Code: ExitDoctorFailed}
 	}
 	return nil
+}
+
+func printChecks(c *Ctx, checks []Check) {
+	colors := map[string]string{"pass": "green", "warn": "yellow", "fail": "red", "skip": "dim"}
+	counts := map[string]int{}
+	for _, ch := range checks {
+		counts[ch.Status]++
+		c.UI.Printf(" %s  %2d. %-17s %s\n", c.UI.C(fmt.Sprintf("%-4s", strings.ToUpper(ch.Status)), colors[ch.Status]), ch.ID, ch.Name, ch.Detail)
+		if ch.Fix != "" && (ch.Status == "warn" || ch.Status == "fail") {
+			c.UI.Printf("%26sfix: %s\n", "", ch.Fix)
+		}
+	}
+	c.UI.Printf("\n%d passed, %d warnings, %d failed\n", counts["pass"], counts["warn"], counts["fail"])
 }
 
 var (
