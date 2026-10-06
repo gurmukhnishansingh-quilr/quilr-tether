@@ -144,7 +144,10 @@ func (d *mcpDoctorRun) headers() http.Header {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "application/json, text/event-stream")
-	h.Set("User-Agent", "tether/"+Version)
+	// The gateway can scope a token to an agent by a User-Agent keyword. Claude
+	// Code sends "claude-cli/<version> (...)", so send the same keyword or a
+	// token scoped to Claude Code is refused here but works in Claude Code.
+	h.Set("User-Agent", "claude-cli (tether/"+Version+"; mcp doctor)")
 	if d.session != "" {
 		h.Set("Mcp-Session-Id", d.session)
 	}
@@ -230,7 +233,9 @@ func (d *mcpDoctorRun) call(ch Check, body map[string]any) (*Response, *rpcRespo
 		ch.Status = "fail"
 		ch.Detail = fmt.Sprintf("HTTP %d: %s", resp.Status, Redact(resp.ErrorMessage()))
 		ch.Fix = fmt.Sprintf("check the token (tether mcp set-key %s)", d.m.Name)
-		if d.m.Email != "" {
+		if strings.Contains(strings.ToLower(resp.ErrorMessage()), "user-agent") {
+			ch.Fix = fmt.Sprintf("the token is scoped to another agent; create one for Claude Code in Quilr (Settings → API Tokens) and run tether mcp set-key %s", d.m.Name)
+		} else if d.m.Email != "" {
 			ch.Fix += " and that " + d.m.Email + " is on an allowed company domain"
 		}
 		return resp, nil, &ch

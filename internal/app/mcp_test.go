@@ -285,7 +285,8 @@ type fakeMCP struct {
 	mu       sync.Mutex
 	requests []*http.Request
 	sse      bool
-	status   int // non-zero: answer every request with this status
+	status   int    // non-zero: answer every request with this status
+	agent    string // non-empty: refuse a User-Agent without this keyword, as the gateway does for agent-scoped tokens
 }
 
 func newFakeMCP(t *testing.T) *fakeMCP {
@@ -299,6 +300,10 @@ func (f *fakeMCP) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.requests = append(f.requests, r.Clone(r.Context()))
 	f.mu.Unlock()
+	if f.agent != "" && !strings.Contains(strings.ToLower(r.UserAgent()), f.agent) {
+		writeJSONResp(w, 403, map[string]any{"detail": "This API token is scoped to the '" + f.agent + "' agent. Request user-agent does not match."})
+		return
+	}
 	if f.status != 0 {
 		w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="x"`)
 		writeJSONResp(w, f.status, map[string]any{"error": "unauthorized"})
@@ -380,6 +385,28 @@ func TestMCPDoctorAllGreen(t *testing.T) {
 				t.Fatalf("path %s", req.URL.Path)
 			}
 		}
+	}
+}
+
+// A token scoped to Claude Code passes: doctor sends Claude Code's User-Agent
+// keyword. A token scoped to another agent fails with a fix that says so.
+func TestMCPDoctorAgentScopedToken(t *testing.T) {
+	s := newSandbox(t)
+	f := newFakeMCP(t)
+	f.agent = "claude"
+	s.addMCP("gh", "--slug", "github-prod", "--email", "dev@example.com", "--base-url", f.URL)
+	s.ok("mcp", "use", "gh", "--yes")
+	if rep, r := s.mcpDoctor("gh"); r.code != ExitOK || !rep.OK {
+		t.Fatalf("%s\n%s", rep.status(), r.out)
+	}
+
+	f.agent = "cursor"
+	rep, r := s.mcpDoctor("gh")
+	if r.code != ExitDoctorFailed || rep.Checks[3].Status != "fail" {
+		t.Fatalf("%s\n%s", rep.status(), r.out)
+	}
+	if fix := rep.Checks[3].Fix; !strings.Contains(fix, "scoped to another agent") || strings.Contains(fix, "company domain") {
+		t.Fatal(fix)
 	}
 }
 
